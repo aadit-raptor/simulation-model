@@ -395,16 +395,30 @@ def blk_open(border_color, title_color, title):
     )
 
 def _df_to_excel(df):
+    """Convert a DataFrame to Excel bytes. Handles empty DataFrames safely."""
     buf = io.BytesIO()
+    if df is None or (hasattr(df, "empty") and df.empty):
+        # Write a placeholder so openpyxl always has a visible sheet
+        df = pd.DataFrame({"Note": ["No data available"]})
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, sheet_name="Data")
+        df.to_excel(w, sheet_name="Data", index=True)
+        # Ensure the sheet is visible (openpyxl requires at least one)
+        w.book.active = 0
+    buf.seek(0)
     return buf.getvalue()
 
 def _multi_df_to_excel(sheets):
+    """Convert multiple DataFrames to a multi-sheet Excel file."""
     buf = io.BytesIO()
+    if not sheets:
+        sheets = {"Data": pd.DataFrame({"Note": ["No data"]})}
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         for name, df in sheets.items():
-            df.to_excel(w, sheet_name=name[:31])
+            if df is None or (hasattr(df, "empty") and df.empty):
+                df = pd.DataFrame({"Note": ["No data"]})
+            df.to_excel(w, sheet_name=name[:31], index=True)
+        w.book.active = 0
+    buf.seek(0)
     return buf.getvalue()
 
 def dl_btn(label, data, filename, key):
@@ -1449,12 +1463,12 @@ def page_monte_carlo():
 
     section_hdr("Risk metrics")
     m1,m2,m3,m4,m5,m6 = st.columns(6)
-    m1.metric("Mean IRR",        pf(metrics["Mean IRR"]))
-    m2.metric("Median IRR",      pf(metrics["Median IRR"]))
-    m3.metric("5th pct",         pf(metrics["5% Downside IRR"]))
-    m4.metric("95th pct",        pf(metrics["95% Upside IRR"]))
-    m5.metric(f"P(>{pf(target)})",pf(metrics["Probability IRR > Target"]))
-    m6.metric("Wipeout rate",    pf(sim.wipeout_rate))
+    m1.metric("Mean IRR",        pf(metrics["Mean IRR"] * 100))
+    m2.metric("Median IRR",      pf(metrics["Median IRR"] * 100))
+    m3.metric("5th pct",         pf(metrics["5% Downside IRR"] * 100))
+    m4.metric("95th pct",        pf(metrics["95% Upside IRR"] * 100))
+    m5.metric(f"P(>{pf(target * 100)})",pf(metrics["Probability IRR > Target"] * 100))
+    m6.metric("Wipeout rate",    pf(sim.wipeout_rate * 100))
 
     sample = df.sample(min(50_000, len(df)), random_state=42)
     tabs = st.tabs(["Distributions","Scatter plots","Correlations",
@@ -1493,9 +1507,14 @@ def page_monte_carlo():
         plt.tight_layout(pad=1.2)
         st.pyplot(fig, use_container_width=True); plt.close(fig)
 
-        # Download
-        dist_df = pd.DataFrame({"IRR": irr, "MOIC": moic})
-        dl_btn("Download distributions", _df_to_excel(dist_df),
+        # Download — limit to 10k rows to keep file size manageable
+        n_dl = min(10000, len(irr))
+        dist_df = pd.DataFrame({
+            "IRR (decimal)": irr[:n_dl],
+            "IRR (%)":       irr[:n_dl] * 100,
+            "MOIC":          moic[:n_dl],
+        })
+        dl_btn("Download distributions (10k sample)", _df_to_excel(dist_df),
                "mc_distributions.xlsx", "dl_dist")
 
     with tabs[1]:
@@ -1633,12 +1652,12 @@ def page_monte_carlo():
             irr_s = sr.irr
             comp.append({
                 "Scenario":        sc.capitalize(),
-                "Mean IRR":        pf(float(irr_s.mean())),
-                "Median":          pf(float(np.median(irr_s))),
-                "5th pct":         pf(float(np.percentile(irr_s, 5))),
-                "95th pct":        pf(float(np.percentile(irr_s, 95))),
-                f"P(>{pf(target)})":pf(float((irr_s > target).mean())),
-                "Wipeout":         pf(float(sr.wipeout_rate)),
+                "Mean IRR":        pf(float(irr_s.mean()) * 100),
+                "Median":          pf(float(np.median(irr_s)) * 100),
+                "5th pct":         pf(float(np.percentile(irr_s, 5)) * 100),
+                "95th pct":        pf(float(np.percentile(irr_s, 95)) * 100),
+                f"P(>{pf(target*100)})":pf(float((irr_s > target).mean()) * 100),
+                "Wipeout":         pf(float(sr.wipeout_rate) * 100),
             })
         comp_df = pd.DataFrame(comp).set_index("Scenario")
         st.dataframe(comp_df, use_container_width=True)
